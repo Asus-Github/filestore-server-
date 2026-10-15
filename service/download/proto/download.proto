@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package go.micro.service.download;
 
+option go_package = "filestore-server/service/download/proto;go_micro_service_download";
+
 service DownloadService {
     // 获取下载入口地址
     rpc DownloadEntry(ReqEntry) returns (RespEntry) {}

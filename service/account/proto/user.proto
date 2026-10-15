@@ -2,17 +2,25 @@ syntax = "proto3";
 
 package go.micro.service.user;
 
+option go_package = "filestore-server/service/account/proto;go_micro_service_user";
+
 service UserService {
     // 用户注册
     rpc Signup(ReqSignup) returns (RespSignup) {}
     // 用户登录
     rpc Signin(ReqSignin) returns (RespSignin) {}
+    // 用户退出登录(注销token)
+    rpc Signout(ReqSignout) returns (RespSignout) {}
+    // 校验用户token
+    rpc VerifyToken(ReqVerifyToken) returns (RespVerifyToken) {}
     // 获取用户信息
     rpc UserInfo(ReqUserInfo) returns (RespUserInfo) {}
     // 获取用户文件
     rpc UserFiles(ReqUserFile) returns (RespUserFile) {}
-   // 获取用户文件
+    // 用户文件重命名
     rpc UserFileRename(ReqUserFileRename) returns (RespUserFileRename) {}
+    // 删除用户文件
+    rpc UserFileDelete(ReqUserFileDelete) returns (RespUserFileDelete) {}
 }
 
 message ReqSignup {
@@ -34,6 +42,29 @@ message RespSignin {
     int32 code = 1;
     string token = 2;
     string message = 3;
+    int64 expireAt = 4; // token过期时间(unix秒)
+    string username = 5; // 数据库中的用户名(用户名不区分大小写, 以注册时为准)
+}
+
+message ReqSignout {
+    string username = 1;
+    string token = 2;
+}
+
+message RespSignout {
+    int32 code = 1;
+    string message = 2;
+}
+
+message ReqVerifyToken {
+    string username = 1; // 可选, 不为空时要求与token归属用户一致
+    string token = 2;
+}
+
+message RespVerifyToken {
+    int32 code = 1;
+    string message = 2;
+    string username = 3; // token归属的用户
 }
 
 message ReqUserInfo {
@@ -54,12 +85,14 @@ message RespUserInfo {
 message ReqUserFile {
     string username = 1;
     int32 limit = 2;
+    int32 offset = 3;
 }
 
 message RespUserFile {
     int32 code = 1;
     string message =2;
     bytes fileData = 3;
+    int64 total = 4;
 }
 
 message ReqUserFileRename {
@@ -71,5 +104,15 @@ message ReqUserFileRename {
 message RespUserFileRename {
   int32 code = 1;
   string message =2;
-  bytes fileData = 3;
+  bytes fileData = 3; // 重命名后的文件元信息(json)
+}
+
+message ReqUserFileDelete {
+  string username = 1;
+  string filehash = 2;
+}
+
+message RespUserFileDelete {
+  int32 code = 1;
+  string message = 2;
 }

@@ -1,10 +1,12 @@
 package config
 
-const (
-	// CephAccessKey : 访问Key
-	CephAccessKey = "PFEA7NXWXSOWVTFA16C9"
+var (
+	// CephAccessKey : 访问Key(请通过环境变量注入, 不要写死在代码中)
+	CephAccessKey = envString("FS_CEPH_ACCESS_KEY", "")
 	// CephSecretKey : 访问密钥
-	CephSecretKey = "cf3dwPMeadGbtEgwFUEA6emRVrVfDHpv0pLXFYby"
-	// CephGWEndpoint : gateway地址
-	CephGWEndpoint = "http://<你的rgw_host>:<<你的rgw_port>>"
+	CephSecretKey = envString("FS_CEPH_SECRET_KEY", "")
+	// CephGWEndpoint : gateway地址, 如 http://<rgw_host>:<rgw_port>
+	CephGWEndpoint = envString("FS_CEPH_ENDPOINT", "http://127.0.0.1:7480")
+	// CephBucket : 存放用户文件的bucket
+	CephBucket = envString("FS_CEPH_BUCKET", "userfile")
 )

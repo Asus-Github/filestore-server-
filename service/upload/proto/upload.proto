@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package go.micro.service.upload;
 
+option go_package = "filestore-server/service/upload/proto;go_micro_service_upload";
+
 service UploadService {
     // 获取上传入口地址
     rpc UploadEntry(ReqEntry) returns (RespEntry) {}

@@ -4,12 +4,11 @@ import (
 	"log"
 	"time"
 
-	"github.com/micro/go-micro"
-	_ "github.com/micro/go-plugins/registry/kubernetes"
+	"github.com/urfave/cli/v2"
+	"go-micro.dev/v4"
 
-	// k8s "github.com/micro/kubernetes/go/micro"
-
-	"filestore-server/common"
+	_ "filestore-server/common/plugins"
+	"filestore-server/config"
 	"filestore-server/service/account/handler"
 	proto "filestore-server/service/account/proto"
 	dbproxy "filestore-server/service/dbproxy/client"
@@ -17,20 +16,26 @@ import (
 
 func main() {
 	service := micro.NewService(
-		// service := k8s.NewService(
 		micro.Name("go.micro.service.user"),
 		micro.RegisterTTL(time.Second*10),
 		micro.RegisterInterval(time.Second*5),
-		micro.Flags(common.CustomFlags...),
+		micro.Flags(config.CustomFlags...),
 	)
 
 	// 初始化service, 解析命令行参数等
-	service.Init()
+	service.Init(
+		micro.Action(func(c *cli.Context) error {
+			config.ApplyCustomFlags(c)
+			return nil
+		}),
+	)
 
 	// 初始化dbproxy client
 	dbproxy.Init(service)
 
-	proto.RegisterUserServiceHandler(service.Server(), new(handler.User))
+	if err := proto.RegisterUserServiceHandler(service.Server(), new(handler.User)); err != nil {
+		log.Fatal(err)
+	}
 	if err := service.Run(); err != nil {
 		log.Println(err)
 	}

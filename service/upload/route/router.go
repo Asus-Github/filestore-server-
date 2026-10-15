@@ -1,43 +1,40 @@
 package route
 
 import (
-	"filestore-server/service/upload/api"
-
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+
+	"filestore-server/middleware"
+	userProto "filestore-server/service/account/proto"
+	"filestore-server/service/upload/api"
 )
 
 // Router : 路由表配置
-func Router() *gin.Engine {
+func Router(userCli userProto.UserService) *gin.Engine {
 	// gin framework, 包括Logger, Recovery
 	router := gin.Default()
+	// 分块上传的分块大小为MB级, 无需为multipart表单在内存中缓存过多数据
+	router.MaxMultipartMemory = 8 << 20
 
-	// 处理静态资源
-	router.Static("/static/", "./static")
+	// 使用gin插件支持跨域请求(须在鉴权之前, 保证预检请求OPTIONS能通过)
+	router.Use(middleware.CORS())
 
-	// // 加入中间件，用于校验token的拦截器(将会从account微服务中验证)
-	// router.Use(handler.HTTPInterceptor())
+	router.GET("/healthz", func(c *gin.Context) {
+		c.String(200, "ok")
+	})
 
-	// 使用gin插件支持跨域请求
-	router.Use(cors.New(cors.Config{
-		AllowOrigins:  []string{"*"}, // []string{"http://localhost:8080"},
-		AllowMethods:  []string{"GET", "POST", "OPTIONS"},
-		AllowHeaders:  []string{"Origin", "Range", "x-requested-with", "content-Type"},
-		ExposeHeaders: []string{"Content-Length", "Accept-Ranges", "Content-Range", "Content-Disposition"},
-		// AllowCredentials: true,
-	}))
-
-	// Use之后的所有handler都会经过拦截器进行token校验
+	// 之后的所有handler都会经过拦截器进行token校验(通过account微服务验证)
+	auth := router.Group("/", middleware.Authorize(userCli))
 
 	// 文件上传相关接口
-	router.POST("/file/upload", api.DoUploadHandler)
+	auth.POST("/file/upload", api.DoUploadHandler)
 	// 秒传接口
-	router.POST("/file/fastupload", api.TryFastUploadHandler)
+	auth.POST("/file/fastupload", api.TryFastUploadHandler)
 
 	// 分块上传接口
-	router.POST("/file/mpupload/init", api.InitialMultipartUploadHandler)
-	router.POST("/file/mpupload/uppart", api.UploadPartHandler)
-	router.POST("/file/mpupload/complete", api.CompleteUploadHandler)
+	auth.POST("/file/mpupload/init", api.InitialMultipartUploadHandler)
+	auth.POST("/file/mpupload/uppart", api.UploadPartHandler)
+	auth.POST("/file/mpupload/complete", api.CompleteUploadHandler)
+	auth.POST("/file/mpupload/cancel", api.CancelUploadHandler)
 
 	return router
 }

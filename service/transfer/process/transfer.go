@@ -1,44 +1,36 @@
 package process
 
 import (
-	"bufio"
 	"encoding/json"
 	"log"
-	"os"
 
 	"filestore-server/mq"
 	dbcli "filestore-server/service/dbproxy/client"
 	"filestore-server/store/oss"
 )
 
-// Transfer : 处理文件转移
+// Transfer : 处理文件转移, 返回是否处理成功
 func Transfer(msg []byte) bool {
 	log.Println(string(msg))
 
 	pubData := mq.TransferData{}
-	err := json.Unmarshal(msg, &pubData)
-	if err != nil {
+	if err := json.Unmarshal(msg, &pubData); err != nil {
 		log.Println(err.Error())
 		return false
 	}
 
-	fin, err := os.Open(pubData.CurLocation)
+	bucket, err := oss.Bucket()
 	if err != nil {
 		log.Println(err.Error())
 		return false
 	}
-
-	err = oss.Bucket().PutObject(
-		pubData.DestLocation,
-		bufio.NewReader(fin))
-	if err != nil {
+	// PutObjectFromFile 内部负责打开/关闭本地文件
+	if err := bucket.PutObjectFromFile(pubData.DestLocation, pubData.CurLocation); err != nil {
 		log.Println(err.Error())
 		return false
 	}
 
-	resp, err := dbcli.UpdateFileLocation(
-		pubData.FileHash,
-		pubData.DestLocation)
+	resp, err := dbcli.UpdateFileLocation(pubData.FileHash, pubData.DestLocation)
 	if err != nil {
 		log.Println(err.Error())
 		return false

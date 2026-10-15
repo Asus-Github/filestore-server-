@@ -1,0 +1,12 @@
+{
+  "name": "filestore-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "api": "node api.test.mjs",
+    "browser": "node browser.test.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.48.2"
+  }
+}

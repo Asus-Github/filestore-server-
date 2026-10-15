@@ -1,59 +1,70 @@
 package oss
 
 import (
-	cfg "filestore-server/config"
-	"fmt"
+	"errors"
+	"log"
+	"sync"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+
+	cfg "filestore-server/config"
+	"filestore-server/util"
 )
 
-var ossCli *oss.Client
+var (
+	ossCli  *oss.Client
+	ossErr  error
+	cliOnce sync.Once
+)
 
-// Client : 创建oss client对象
+// ErrUnavailable : oss客户端不可用(配置缺失等)
+var ErrUnavailable = errors.New("oss client is unavailable, please check oss config")
+
+// Client : 创建oss client对象(只创建一次)
 func Client() *oss.Client {
-	if ossCli != nil {
-		return ossCli
-	}
-	ossCli, err := oss.New(cfg.OSSEndpoint,
-		cfg.OSSAccesskeyID, cfg.OSSAccessKeySecret)
-	if err != nil {
-		fmt.Println(err.Error())
-		return nil
-	}
+	cliOnce.Do(func() {
+		ossCli, ossErr = oss.New(cfg.OSSEndpoint, cfg.OSSAccesskeyID, cfg.OSSAccessKeySecret)
+		if ossErr != nil {
+			log.Println("create oss client failed:", ossErr)
+			ossCli = nil
+		}
+	})
 	return ossCli
 }
 
 // Bucket : 获取bucket存储空间
-func Bucket() *oss.Bucket {
+func Bucket() (*oss.Bucket, error) {
 	cli := Client()
-	if cli != nil {
-		bucket, err := cli.Bucket(cfg.OSSBucket)
-		if err != nil {
-			fmt.Println(err.Error())
-			return nil
-		}
-		return bucket
+	if cli == nil {
+		return nil, ErrUnavailable
 	}
-	return nil
+	return cli.Bucket(cfg.OSSBucket)
 }
 
-// DownloadURL : 临时授权下载url
-func DownloadURL(objName string) string {
-	signedURL, err := Bucket().SignURL(objName, oss.HTTPGet, 3600)
+// DownloadURL : 临时授权下载url, filename用于指定下载时保存的文件名
+func DownloadURL(objName string, filename string, expireSeconds int64) (string, error) {
+	bucket, err := Bucket()
 	if err != nil {
-		fmt.Println(err.Error())
-		return ""
+		return "", err
 	}
-	return signedURL
+	opts := []oss.Option{}
+	if filename != "" {
+		opts = append(opts, oss.ResponseContentDisposition(util.ContentDisposition("attachment", filename)))
+	}
+	return bucket.SignURL(objName, oss.HTTPGet, expireSeconds, opts...)
 }
 
 // BuildLifecycleRule : 针对指定bucket设置生命周期规则
-func BuildLifecycleRule(bucketName string) {
+func BuildLifecycleRule(bucketName string) error {
+	cli := Client()
+	if cli == nil {
+		return ErrUnavailable
+	}
 	// 表示前缀为test的对象(文件)距最后修改时间30天后过期。
 	ruleTest1 := oss.BuildLifecycleRuleByDays("rule1", "test/", true, 30)
 	rules := []oss.LifecycleRule{ruleTest1}
 
-	Client().SetBucketLifecycle(bucketName, rules)
+	return cli.SetBucketLifecycle(bucketName, rules)
 }
 
 // GenFileMeta :  构造文件元信息

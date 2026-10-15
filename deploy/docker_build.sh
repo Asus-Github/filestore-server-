@@ -1,8 +1,7 @@
 #!/bin/bash
 
-#ROOT_DIR=$GOPATH/filestore-server
-ROOT_DIR=/data/go/work/src/filestore-server
-#ROOT_DIR=/data/imooc/src/filestore-server
+# 工程根目录(脚本所在目录的上一级)
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 services="
 dbproxy
 upload
@@ -15,7 +14,8 @@ apigw
 # 编译service可执行文件
 build_service() {
     rm -f ${ROOT_DIR}/deploy/bin/$1
-    go build -o ${ROOT_DIR}/deploy/bin/$1 ${ROOT_DIR}/service/$1/main.go
+    # 镜像基于linux, 交叉编译静态链接的可执行文件
+    CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH:-amd64} go build -o ${ROOT_DIR}/deploy/bin/$1 ./service/$1
     echo -e "\033[32m编译完成: \033[0m ${ROOT_DIR}/deploy/bin/$1"
 }
 
@@ -29,8 +29,7 @@ build_image() {
 # 切换到工程根目录
 cd ${ROOT_DIR}
 
-# 打包静态资源
-mkdir ${ROOT_DIR}/assets -p && go-bindata-assetfs -pkg assets -o ${ROOT_DIR}/assets/asset.go static/...
+# 静态资源通过 go:embed 在编译时打包进apigw(见 static/static.go), 无需额外处理
 
 # 执行编译service
 mkdir -p ${ROOT_DIR}/deploy/bin && rm -f ${ROOT_DIR}/deploy/bin/*

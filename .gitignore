@@ -1,4 +1,9 @@
 service/bin
+service/run
+service/log
+data/
+test/e2e/node_modules
+test/e2e/artifacts
 deploy/*/*
 !deploy/ci-cd/*
 !deploy/traefik*/*

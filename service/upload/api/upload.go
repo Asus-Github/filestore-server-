@@ -1,189 +1,154 @@
 package api
 
 import (
-	"bytes"
-	"encoding/json"
+	"crypto/sha1"
+	"encoding/hex"
+	"errors"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"time"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	cmn "filestore-server/common"
 	cfg "filestore-server/config"
-	"filestore-server/mq"
+	"filestore-server/middleware"
 	dbcli "filestore-server/service/dbproxy/client"
-	"filestore-server/service/dbproxy/orm"
-	"filestore-server/store/ceph"
-	"filestore-server/store/oss"
 	"filestore-server/util"
 )
 
-// DoUploadHandler ： 处理文件上传
-func DoUploadHandler(c *gin.Context) {
-	errCode := 0
-	defer func() {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-		if errCode < 0 {
-			c.JSON(http.StatusOK, gin.H{
-				"code": errCode,
-				"msg":  "上传失败",
-			})
-		} else {
-			c.JSON(http.StatusOK, gin.H{
-				"code": errCode,
-				"msg":  "上传成功",
-			})
-		}
-	}()
+// multipartOverhead : multipart表单中除文件内容外其他字段的预留空间
+const multipartOverhead = 1 << 20
 
-	// 1. 从form表单中获得文件内容句柄
+// DoUploadHandler ： 处理文件上传(普通上传, 适合较小的文件)
+// 表单字段: file(必填), filehash(选填, 提供时服务端会校验), filename(选填, 原始文件名)
+func DoUploadHandler(c *gin.Context) {
+	username := middleware.Username(c)
+
+	// 1. 限制请求体大小, 从form表单中获得文件内容句柄
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, cfg.MaxUploadSize+multipartOverhead)
 	file, head, err := c.Request.FormFile("file")
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			middleware.Fail(c, cmn.StatusFileTooLarge, "文件过大, 请使用分块上传")
+			return
+		}
 		log.Printf("Failed to get form data, err:%s\n", err.Error())
-		errCode = -1
+		middleware.Fail(c, cmn.StatusParamInvalid, "请选择要上传的文件")
 		return
 	}
 	defer file.Close()
 
-	// 2. 把文件内容转为[]byte
-	buf := bytes.NewBuffer(nil)
-	if _, err := io.Copy(buf, file); err != nil {
-		log.Printf("Failed to get file data, err:%s\n", err.Error())
-		errCode = -2
+	// 浏览器会把multipart文件名中的 " 等字符转义为 %22, 因此优先使用表单中单独提交的原始文件名
+	rawName := head.Filename
+	if name := c.PostForm("filename"); name != "" {
+		rawName = name
+	}
+	filename, err := util.SanitizeFileName(rawName)
+	if err != nil {
+		middleware.Fail(c, cmn.StatusParamInvalid, err.Error())
 		return
 	}
 
-	// 3. 构建文件元信息
-	fileMeta := dbcli.FileMeta{
-		FileName: head.Filename,
-		FileSha1: util.Sha1(buf.Bytes()), //　计算文件sha1
-		FileSize: int64(len(buf.Bytes())),
-		UploadAt: time.Now().Format("2006-01-02 15:04:05"),
-	}
-
-	// 4. 将文件写入临时存储位置
-	fileMeta.Location = cfg.TempLocalRootDir + fileMeta.FileSha1 // 临时存储地址
-	newFile, err := os.Create(fileMeta.Location)
+	// 2. 边写入临时文件边计算sha1, 避免将整个文件读入内存
+	tmp, err := createTemp(cfg.TempLocalRootDir, ".upload-*")
 	if err != nil {
 		log.Printf("Failed to create file, err:%s\n", err.Error())
-		errCode = -3
+		middleware.Fail(c, cmn.StatusServerError, "服务错误")
 		return
 	}
-	defer newFile.Close()
-
-	nByte, err := newFile.Write(buf.Bytes())
-	if int64(nByte) != fileMeta.FileSize || err != nil {
-		log.Printf("Failed to save data into file, writtenSize:%d, err:%s\n", nByte, err.Error())
-		errCode = -4
-		return
+	h := sha1.New()
+	size, err := io.Copy(io.MultiWriter(tmp, h), file)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
 	}
-
-	// 5. 同步或异步将文件转移到Ceph/OSS
-	newFile.Seek(0, 0) // 游标重新回到文件头部
-	if cfg.CurrentStoreType == cmn.StoreCeph {
-		// 文件写入Ceph存储
-		data, _ := ioutil.ReadAll(newFile)
-		cephPath := cfg.CephRootDir + fileMeta.FileSha1
-		_ = ceph.PutObject("userfile", cephPath, data)
-		fileMeta.Location = cephPath
-	} else if cfg.CurrentStoreType == cmn.StoreOSS {
-		// 文件写入OSS存储
-		ossPath := cfg.OSSRootDir + fileMeta.FileSha1
-		// 判断写入OSS为同步还是异步
-		if !cfg.AsyncTransferEnable {
-			// TODO: 设置oss中的文件名，方便指定文件名下载
-			err = oss.Bucket().PutObject(ossPath, newFile)
-			if err != nil {
-				log.Println(err.Error())
-				errCode = -5
-				return
-			}
-			fileMeta.Location = ossPath
-		} else {
-			// 写入异步转移任务队列
-			data := mq.TransferData{
-				FileHash:      fileMeta.FileSha1,
-				CurLocation:   fileMeta.Location,
-				DestLocation:  ossPath,
-				DestStoreType: cmn.StoreOSS,
-			}
-			pubData, _ := json.Marshal(data)
-			pubSuc := mq.Publish(
-				cfg.TransExchangeName,
-				cfg.TransOSSRoutingKey,
-				pubData,
-			)
-			if !pubSuc {
-				// TODO: 当前发送转移信息失败，稍后重试
-			}
-		}
-	}
-
-	//6.  更新文件表记录
-	_, err = dbcli.OnFileUploadFinished(fileMeta)
 	if err != nil {
-		errCode = -6
+		os.Remove(tmp.Name())
+		log.Printf("Failed to save data into file, err:%s\n", err.Error())
+		middleware.Fail(c, cmn.StatusUploadFailed, "上传失败")
+		return
+	}
+	if size > cfg.MaxUploadSize {
+		os.Remove(tmp.Name())
+		middleware.Fail(c, cmn.StatusFileTooLarge, "文件过大, 请使用分块上传")
 		return
 	}
 
-	// 7. 更新用户文件表
-	username := c.Request.FormValue("username")
-	upRes, err := dbcli.OnUserFileUploadFinished(username, fileMeta)
-	if err == nil && upRes.Suc {
-		errCode = 0
-	} else {
-		errCode = -6
+	// 3. 校验客户端提供的hash
+	filehash := hex.EncodeToString(h.Sum(nil))
+	if claimed := strings.ToLower(strings.TrimSpace(c.PostForm("filehash"))); claimed != "" && claimed != filehash {
+		os.Remove(tmp.Name())
+		middleware.Fail(c, cmn.StatusFileVerifyFailed, "文件校验失败, 内容与hash不一致")
+		return
 	}
+
+	// 4. 将文件移动到存储位置
+	location, err := commitLocalFile(tmp.Name(), filehash, size)
+	if err != nil {
+		log.Println(err)
+		middleware.Fail(c, cmn.StatusServerError, "服务错误")
+		return
+	}
+
+	// 5. 转存并更新文件表/用户文件表
+	finishUpload(c, username, dbcli.FileMeta{
+		FileSha1: filehash,
+		FileName: filename,
+		FileSize: size,
+		Location: location,
+	})
 }
 
 // TryFastUploadHandler : 尝试秒传接口
+// 参数: filehash, filename, filesize(需与服务端文件大小一致)
 func TryFastUploadHandler(c *gin.Context) {
-
 	// 1. 解析请求参数
-	username := c.Request.FormValue("username")
-	filehash := c.Request.FormValue("filehash")
-	filename := c.Request.FormValue("filename")
-	// filesize, _ := strconv.Atoi(c.Request.FormValue("filesize"))
-
-	// 2. 从文件表中查询相同hash的文件记录
-	fileMetaResp, err := dbcli.GetFileMeta(filehash)
+	username := middleware.Username(c)
+	filehash := strings.ToLower(strings.TrimSpace(c.PostForm("filehash")))
+	if !util.IsValidSha1(filehash) {
+		middleware.Fail(c, cmn.StatusParamInvalid, "filehash参数无效")
+		return
+	}
+	filename, err := util.SanitizeFileName(c.PostForm("filename"))
 	if err != nil {
-		log.Println(err.Error())
-		c.Status(http.StatusInternalServerError)
+		middleware.Fail(c, cmn.StatusParamInvalid, err.Error())
+		return
+	}
+	filesize, err := strconv.ParseInt(c.PostForm("filesize"), 10, 64)
+	if err != nil || filesize < 0 {
+		middleware.Fail(c, cmn.StatusParamInvalid, "filesize参数无效")
 		return
 	}
 
-	// 3. 查不到记录则返回秒传失败
-	if !fileMetaResp.Suc {
-		resp := util.RespMsg{
-			Code: -1,
-			Msg:  "秒传失败，请访问普通上传接口",
-		}
-		c.Data(http.StatusOK, "application/json", resp.JSONBytes())
+	// 2. 从文件表中查询相同hash的文件记录
+	tfile, err := dbcli.GetTableFile(filehash)
+	if err != nil {
+		log.Println(err.Error())
+		middleware.Fail(c, cmn.StatusServerError, "服务错误")
+		return
+	}
+
+	// 3. 查不到记录(或文件已丢失、大小不一致)则返回秒传失败
+	if tfile == nil || tfile.FileSize != filesize || !fileAvailable(tfile.FileAddr, tfile.FileSize) {
+		middleware.Fail(c, cmn.StatusFastUploadMiss, "秒传失败，请访问普通上传接口")
 		return
 	}
 
 	// 4. 上传过则将文件信息写入用户文件表， 返回成功
-	fmeta := dbcli.TableFileToFileMeta(fileMetaResp.Data.(orm.TableFile))
+	fmeta := dbcli.TableFileToFileMeta(*tfile)
 	fmeta.FileName = filename
-	upRes, err := dbcli.OnUserFileUploadFinished(username, fmeta)
-	if err == nil && upRes.Suc {
-		resp := util.RespMsg{
-			Code: 0,
-			Msg:  "秒传成功",
-		}
-		c.Data(http.StatusOK, "application/json", resp.JSONBytes())
+	if _, err := dbcli.OnUserFileUploadFinished(username, fmeta); err != nil {
+		log.Println(err)
+		middleware.Fail(c, cmn.StatusServerError, "秒传失败，请稍后重试")
 		return
 	}
-	resp := util.RespMsg{
-		Code: -2,
-		Msg:  "秒传失败，请稍后重试",
-	}
-	c.Data(http.StatusOK, "application/json", resp.JSONBytes())
-	return
+	middleware.OK(c, "秒传成功", gin.H{
+		"FileHash": fmeta.FileSha1,
+		"FileName": fmeta.FileName,
+		"FileSize": fmeta.FileSize,
+	})
 }

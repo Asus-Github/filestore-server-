@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package go.micro.service.dbproxy;
 
+option go_package = "filestore-server/service/dbproxy/proto;go_micro_service_dbproxy";
+
 service DBProxyService {
     // 请求执行sql动作
     rpc ExecuteAction(ReqExec) returns (RespExec) {}

@@ -39,61 +39,31 @@ git clone --branch v0.3 https://git.imooc.com/coding-323/filestore-server.git
 git clone --branch v0.2 https://git.imooc.com/coding-323/filestore-server.git
 ```
 
-## 关于需要手动安装的库
+## 本地快速启动(Go 版本见 go.mod, 使用 go modules)
 
-如下：
-```shell
-go get github.com/garyburd/redigo/redis
-go get github.com/go-sql-driver/mysql
-#go get github.com/garyburd/redigo/redis
-go get github.com/gomodule/redigo/redis
-go get github.com/json-iterator/go
-go get github.com/aliyun/aliyun-oss-go-sdk/oss
-go get gopkg.in/amz.v1/aws
-go get gopkg.in/amz.v1/s3
-go get github.com/streadway/amqp
-go get github.com/gin-gonic/gin
-go get github.com/gin-contrib/cors
-go get github.com/micro/go-micro
-go get github.com/mitchellh/mapstructure
-go get github.com/jteeuwen/go-bindata/...
-go get github.com/moxiaomomo/go-bindata-assetfs/...
-go get github.com/gin-gonic/contrib/static
-go get github.com/micro/go-micro/cmd
-go get github.com/micro/go-plugins/registry/kubernetes
-go get -v github.com/micro/go-plugins/wrapper/breaker/hystrix
-go get -v github.com/juju/ratelimit
-go get -v github.com/micro/go-plugins/wrapper/ratelimiter/ratelimit
-```
-其中如果有提示`golang.org/x`相关的包无法下载的话，可以参考这篇文章:
-[国内下载golang.org/x/net](https://yq.aliyun.com/articles/292301?spm=5176.10695662.1996646101.searchclickresult.6155183eCmXHbQ)
+依赖通过 `go.mod` 管理(go-micro v4、gin、redigo 等), 无需手动 `go get`。国内网络可设置 `GOPROXY=https://goproxy.cn,direct`。
 
-## 关于应用启动
-
-- 在加入rabbitMQ实现文件异步转移之前，启动方式：
-
-    - 启动上传应用程序:
 ```bash
-# cd $GOPATH/<你的工程目录>
-> cd $GOPATH/filestore-server
-> go run main.go
+# 1. 启动 MySQL / Redis / etcd(首次启动自动执行 doc/table.sql 建库建表)
+docker compose -f deploy/local/docker-compose.yml up -d
+
+# 2. 编译并启动全部微服务(配置均可通过环境变量覆盖, 见 config/*.go 与 test/e2e/env.sh)
+source test/e2e/env.sh && ./service/start-all.sh
+# 浏览器访问 http://localhost:18080/static/view/signin.html
+
+# 3. 运行测试
+go test ./...
+node test/e2e/api.test.mjs                               # 接口端到端测试
+(cd test/e2e && npm install && node browser.test.mjs)    # 真实 Chrome 浏览器端到端测试
+
+# 4. 关闭
+./service/stop-all.sh
 ```
 
-- 在加入rabbitMQ实现文件异步转移阶段，启动方式(分裂成了两个独立程序)：
+常用环境变量: `FS_MYSQL_HOST` `FS_REDIS_HOST` `FS_DATA_DIR` `FS_PART_DIR` `FS_APIGW_ADDR` `FS_UPLOAD_ENTRY` `FS_DOWNLOAD_ENTRY`
+`FS_TOKEN_SECRET`(生产环境务必修改) `FS_CHUNK_SIZE` `MICRO_REGISTRY` `MICRO_REGISTRY_ADDRESS`。
 
-    - 启动上传应用程序:
-```bash
-# cd $GOPATH/<你的工程目录>
-> cd $GOPATH/filestore-server
-> go run service/upload/main.go
-```
-
-    - 启动转移应用程序:
-```bash
-# cd $GOPATH/<你的工程目录>
-> cd $GOPATH/filestore-server
-> go run service/transfer/main.go
-```
+## 关于应用启动(历史版本)
 
 -  微服务架构下启动方式(非容器化部署):
 

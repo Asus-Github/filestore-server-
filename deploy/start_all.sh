@@ -1,7 +1,6 @@
 #!/bin/bash
 
-ROOT_DIR=/data/go/work/src/filestore-server
-#ROOT_DIR=/data/imooc/src/filestore-server
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 services="
 dbproxy
 upload
@@ -17,7 +16,7 @@ hostIP="192.168.2.244"
 registryAddr="--registry=consul --registry_address=${hostIP}:8500"
 redisAddr="--cachehost=${hostIP}:6379"
 mysqlAddr="--dbhost=${hostIP}:3306"
-mqAddr="--mqhost=${hostIP}:9200"
+mqAddr="--mqhost=amqp://guest:guest@${hostIP}:5672/"
 
 # 强制删除已有的容器
 # 生产环境不建议这么做, 后续用k8s可以实现服务平滑重启

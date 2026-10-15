@@ -1,111 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
 <head>
-  <script src="http://libs.baidu.com/jquery/2.0.0/jquery.min.js"></script>
-  <script src="/static/js/layui.js"></script>
-  <script src="/static/js/FileSaver.js"></script>
-  <script src="/static/js/sw.js"></script>
-  <script src="/static/js/StreamSaver.js"></script>
-  <!-- load before streams polyfill to detect support -->
-  <script src="/static/js/polyfill.min.js"></script>
-  <script type="text/javascript">
-    var req = new XMLHttpRequest();
-    var paused = false;
-    var fileParts = [];
-    var lastByteLoaded = 0;
-    var byteLoaded = 0;
-    var url = localStorage.getItem('curDownloadUrl');
-    var filename = "unknown";
-    var filesize = -1;
-
-    $(document).ready(function () {
-      req.open("GET", url, true);
-      addListeners(req);
-      req.setRequestHeader('Range', 'bytes=' + lastByteLoaded + '-');
-      req.send();
-    });
-
-    function loadedSize() {
-      var size = 0;
-      for (var i = 0; i < fileParts.length; i++) {
-        size += fileParts[i].byteLength;
-      }
-      return size;
-    }
-
-    function addListeners(req) {
-      //监听进度事件
-      req.onprogress = function (evt) {
-        if (evt.lengthComputable) {
-          // 第一次获取文件总大小
-          if (filesize < 0) {
-            filesize = evt.total;
-            req.abort();
-            // 真正开始下载文件
-            resumeDownload();
-          } else {
-            var percentComplete = (lastByteLoaded + evt.loaded) / filesize;
-            $("#progressing").html('[下载进度] ' + (percentComplete * 100) + "%");
-            byteLoaded = lastByteLoaded + evt.loaded;
-            if (byteLoaded >= filesize) {
-              $("#ctlbtn").attr("disabled", "true");
-            }
-          }
-        }
-      };
-
-      req.responseType = "arraybuffer"; // "blob";
-      req.onreadystatechange = function () {
-        if (req.status !== 200 && req.status !== 206) {
-          return;
-        }
-        var name = req.getResponseHeader("Content-Disposition");
-        filename = name.match(/attachment; filename="(.*)"/)[1];
-
-        if (req.readyState === 4) {}
-      };
-
-      req.onload = function (oEvent) {
-        var arrayBuffer = req.response; // Note: not oReq.responseText
-        if (arrayBuffer) {
-          fileParts.push(new Uint8Array(arrayBuffer));
-          lastByteLoaded = loadedSize();
-          // alert(filesize + '  ' + lastByteLoaded + '   ' + arrayBuffer.byteLength);
-          if (lastByteLoaded >= filesize) {
-            $("#progressing").html('[下载进度] 100%');
-            $("#ctlbtn").attr("disabled", "true");
-
-            var blob = new Blob(fileParts);
-            saveAs(blob, filename);
-          } else {
-            resumeDownload();
-          }
-        }
-      };
-    }
-
-    function abortDownload() {
-      if (!paused) {
-        // 暂停下载，结束当前partial download
-        req.abort();
-      } else {
-        // 继续下载，开始下一个指定起始位置的partial download
-        resumeDownload();
-      }
-      paused = !paused;
-    }
-
-    // 指定range 下载
-    function resumeDownload() {
-      req.open("GET", url, true);
-      addListeners(req);
-      lastByteLoaded = loadedSize();
-      req.setRequestHeader('Range', 'bytes=' + lastByteLoaded + '-' + (lastByteLoaded + 1024 * 1024 * 20 - 1));
-      req.send();
-    }
-  </script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>断点下载 - 文件云盘</title>
+  <link rel="stylesheet" href="/static/css/app.css">
 </head>
 
 <body>
-  <div id="progressing">[下载进度] 0%</div>
-  <button id="ctlbtn" class="btn btn-primary" onclick="abortDownload()" style="margin:5px;">暂停/继续
-  </button>
+  <main class="dl-page" id="dl-page">
+    <div class="fname" id="dl-name">正在获取文件信息...</div>
+    <div class="muted mono" id="dl-hash"></div>
+    <div class="progress lg" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+      aria-labelledby="dl-name" id="dl-progress">
+      <div class="bar" id="dl-bar"></div>
+    </div>
+    <div class="stats">
+      <span id="dl-status" role="status" aria-live="polite">准备中</span>
+      <span id="dl-detail"></span>
+    </div>
+    <div class="controls">
+      <button class="btn btn-primary" id="dl-toggle" type="button" disabled>暂停</button>
+      <button class="btn" id="dl-save" type="button" hidden>重新保存文件</button>
+      <a class="btn" id="dl-back" href="/static/view/home.html" hidden>返回文件列表</a>
+    </div>
+    <p class="muted" style="margin-top:16px;font-size:12px">
+      文件按 4MB 分段下载, 可随时暂停/继续, 网络中断后会自动重试; 下载完成后会校验文件完整性。
+    </p>
+  </main>
+
+  <script src="/static/js/app.js"></script>
+  <script src="/static/js/sha1.js"></script>
+  <script src="/static/js/download.js"></script>
 </body>
+
+</html>

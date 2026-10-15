@@ -1,64 +1,103 @@
 package handler
 
 import (
-	"context"
-	"log"
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	cmn "filestore-server/common"
+	"filestore-server/middleware"
 	userProto "filestore-server/service/account/proto"
+	"filestore-server/util"
 )
 
-// FileQueryHandler : 查询批量的文件元信息
-func FileQueryHandler(c *gin.Context) {
-	limitCnt, _ := strconv.Atoi(c.Request.FormValue("limit"))
-	username := c.Request.FormValue("username")
+// FileQueryHandler : 分页查询当前用户的文件列表
+// 参数: limit(默认20, 最大100), offset(默认0)
+func (h *Handler) FileQueryHandler(c *gin.Context) {
+	limitCnt, _ := strconv.Atoi(c.PostForm("limit"))
+	offset, _ := strconv.Atoi(c.PostForm("offset"))
 
-	rpcResp, err := userCli.UserFiles(context.TODO(), &userProto.ReqUserFile{
-		Username: username,
+	rpcResp, err := h.UserCli.UserFiles(c.Request.Context(), &userProto.ReqUserFile{
+		Username: middleware.Username(c),
 		Limit:    int32(limitCnt),
+		Offset:   int32(offset),
 	})
-
 	if err != nil {
-		log.Println(err.Error())
-		c.Status(http.StatusInternalServerError)
+		rpcFailed(c, err)
+		return
+	}
+	if rpcResp.Code != cmn.StatusOK {
+		middleware.Fail(c, rpcResp.Code, rpcResp.Message)
 		return
 	}
 
-	if len(rpcResp.FileData) <= 0 {
-		rpcResp.FileData = []byte("[]")
+	files := json.RawMessage(rpcResp.FileData)
+	if len(files) == 0 {
+		files = json.RawMessage("[]")
 	}
-	c.Data(http.StatusOK, "application/json", rpcResp.FileData)
+	middleware.OK(c, "OK", gin.H{
+		"Total": rpcResp.Total,
+		"Files": files,
+	})
 }
 
-// FileMetaUpdateHandler ： 更新元信息接口(重命名)
-func FileMetaUpdateHandler(c *gin.Context) {
-	opType := c.Request.FormValue("op")
-	fileSha1 := c.Request.FormValue("filehash")
-	username := c.Request.FormValue("username")
-	newFileName := c.Request.FormValue("filename")
+// fileHashParam : 获取并校验filehash参数
+func fileHashParam(c *gin.Context) (string, bool) {
+	filehash := strings.ToLower(strings.TrimSpace(c.PostForm("filehash")))
+	if !util.IsValidSha1(filehash) {
+		middleware.Fail(c, cmn.StatusParamInvalid, "filehash参数无效")
+		return "", false
+	}
+	return filehash, true
+}
 
-	if opType != "0" || len(newFileName) < 1 {
-		c.Status(http.StatusForbidden)
+// FileMetaUpdateHandler ： 更新元信息接口(op=0: 重命名)
+func (h *Handler) FileMetaUpdateHandler(c *gin.Context) {
+	if c.PostForm("op") != "0" {
+		middleware.Fail(c, cmn.StatusParamInvalid, "不支持的操作类型")
+		return
+	}
+	filehash, ok := fileHashParam(c)
+	if !ok {
 		return
 	}
 
-	rpcResp, err := userCli.UserFileRename(context.TODO(), &userProto.ReqUserFileRename{
-		Username:    username,
-		Filehash:    fileSha1,
-		NewFileName: newFileName,
+	rpcResp, err := h.UserCli.UserFileRename(c.Request.Context(), &userProto.ReqUserFileRename{
+		Username:    middleware.Username(c),
+		Filehash:    filehash,
+		NewFileName: c.PostForm("filename"),
 	})
-
 	if err != nil {
-		log.Println(err.Error())
-		c.Status(http.StatusInternalServerError)
+		rpcFailed(c, err)
 		return
 	}
-
-	if len(rpcResp.FileData) <= 0 {
-		rpcResp.FileData = []byte("[]")
+	if rpcResp.Code != cmn.StatusOK {
+		middleware.Fail(c, rpcResp.Code, rpcResp.Message)
+		return
 	}
-	c.Data(http.StatusOK, "application/json", rpcResp.FileData)
+	var data interface{}
+	if len(rpcResp.FileData) > 0 {
+		data = json.RawMessage(rpcResp.FileData)
+	}
+	middleware.Resp(c, http.StatusOK, rpcResp.Code, rpcResp.Message, data)
+}
+
+// FileDeleteHandler : 删除用户文件
+func (h *Handler) FileDeleteHandler(c *gin.Context) {
+	filehash, ok := fileHashParam(c)
+	if !ok {
+		return
+	}
+	rpcResp, err := h.UserCli.UserFileDelete(c.Request.Context(), &userProto.ReqUserFileDelete{
+		Username: middleware.Username(c),
+		Filehash: filehash,
+	})
+	if err != nil {
+		rpcFailed(c, err)
+		return
+	}
+	middleware.Resp(c, http.StatusOK, rpcResp.Code, rpcResp.Message, nil)
 }
